@@ -1,0 +1,143 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
+from sklearn.metrics import silhouette_score
+
+plt.rcParams['figure.figsize'] = (9,5)
+
+
+print("Objective: Discover latent UAV motion modes using unsupervised learning")
+
+
+# load the dataset
+df = pd.read_csv("/content/uav_navigation_dataset.csv")
+
+print("Data loaded successfully")
+print("Total rows:", df.shape[0])
+print("Columns:", df.columns.tolist())
+
+
+# keep only numeric columns
+num_df = df.select_dtypes(include=['int64', 'float64']).copy()
+
+
+# create motion-related features
+# overall movement intensity
+num_df['motion_strength'] = np.sqrt((num_df.diff()**2).sum(axis=1))
+
+# vertical change helps detect climb or descent
+num_df['vertical_change'] = num_df.iloc[:, 0].diff()
+
+# horizontal change roughly represents forward or sideways motion
+num_df['horizontal_change'] = num_df.iloc[:, 1:].diff().abs().sum(axis=1)
+
+num_df.dropna(inplace=True)
+
+print("Motion features created")
+
+
+# scale the data
+scaler = StandardScaler()
+X = scaler.fit_transform(num_df)
+
+
+# elbow method
+inertia = []
+
+for k in range(1, 8):
+    km = KMeans(n_clusters=k, random_state=42)
+    km.fit(X)
+    inertia.append(km.inertia_)
+
+plt.plot(range(1,8), inertia, marker='o')
+plt.title("Elbow Method for Motion Clusters")
+plt.xlabel("Number of clusters")
+plt.ylabel("Inertia")
+plt.show()
+
+
+# apply K-Means
+kmeans = KMeans(n_clusters=4, random_state=42)
+num_df['cluster'] = kmeans.fit_predict(X)
+
+print("Cluster distribution:")
+print(num_df['cluster'].value_counts())
+
+
+# evaluatie clustering quality
+sil_score = silhouette_score(X, num_df['cluster'])
+print("Silhouette Score:", sil_score)
+print("Positive score indicates meaningful separation between motion modes")
+
+
+# PCA for visualization
+pca = PCA(n_components=2)
+pca_result = pca.fit_transform(X)
+
+num_df['PCA1'] = pca_result[:, 0]
+num_df['PCA2'] = pca_result[:, 1]
+
+plt.scatter(num_df['PCA1'], num_df['PCA2'],
+            c=num_df['cluster'], cmap='viridis')
+plt.title("PCA Visualization of Discovered Motion Modes")
+plt.xlabel("PCA 1")
+plt.ylabel("PCA 2")
+plt.colorbar(label="Cluster")
+plt.show()
+
+
+# analyze average behavior per cluster
+cluster_mean = num_df.groupby('cluster').mean()
+
+print("Average motion behavior per cluster:")
+print(cluster_mean[['motion_strength',
+                     'vertical_change',
+                     'horizontal_change']])
+
+
+# assign simple meaning to clusters
+def explain_cluster(row):
+    if row['motion_strength'] < cluster_mean['motion_strength'].mean():
+        return "Hover / very stable"
+    elif row['vertical_change'] > 0:
+        return "Climb or descend"
+    else:
+        return "Forward or lateral movement"
+
+num_df['motion_type'] = num_df.apply(explain_cluster, axis=1)
+
+print("Discovered motion types:")
+print(num_df[['cluster', 'motion_type']].drop_duplicates())
+
+
+# motion intensity over time
+plt.plot(num_df['motion_strength'])
+plt.title("Motion Intensity Over Time")
+plt.xlabel("Time index")
+plt.ylabel("Motion strength")
+plt.show()
+
+
+# vertical vs horizontal motion
+sns.scatterplot(x=num_df['horizontal_change'],
+                y=num_df['vertical_change'],
+                hue=num_df['cluster'])
+plt.title("Vertical vs Horizontal Motion")
+plt.show()
+
+
+# motion strength comparison
+sns.boxplot(x=num_df['cluster'], y=num_df['motion_strength'])
+plt.title("Motion Strength Across Clusters")
+plt.show()
+
+
+# final output
+num_df.to_csv("uav_motion_modes_kmeans.csv", index=False)
+print("Final output saved: uav_motion_modes_kmeans.csv")
+print("Output contains motion clusters and interpreted motion types")
